@@ -47,6 +47,19 @@ class MABOffsets:
     UnknownSection4: (int, int)
     UnknownSection5: (int, int)
 
+class MeshBone:
+    """
+    Stores the bone's name and its parent's
+    """
+    Name: str
+    Parent: str
+
+    def __repr__(self) -> str:
+        if self.Parent == "":
+            return f"{type(self).__name__}(Name={self.Name})"
+        else:
+            return f"{type(self).__name__}(Name={self.Name}, Parent={self.Parent})"
+
 class RotKeyFrameSection:
     """
     Stores helper information about the rotation keyframe section
@@ -57,6 +70,50 @@ class RotKeyFrameSection:
 
     def __repr__(self) -> str:
         return f"{type(self).__name__}(start={hex(self.OffsetStart)}, size={self.Size})"
+
+class Quaternion:
+    x: float
+    y: float
+    z: float
+    w: float
+
+    def __init__(self, x, y, z, w):
+        self.x = x
+        self.y = y
+        self.z = z
+        self.w = w
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}(x={'{0:.10f}'.format(self.x)}, y={'{0:.10f}'.format(self.y)}, z={'{0:.10f}'.format(self.z)}, w={'{0:.10f}'.format(self.w)})"
+
+    def euler(self) -> str:
+        pitch = math.asin(-2.0*(self.x*self.z - self.w*self.y));
+        yaw = math.atan2(2.0*(self.y*self.z + self.w*self.x), self.w*self.w - self.x*self.x - self.y*self.y + self.z*self.z);
+        roll = math.atan2(2.0*(self.x*self.y + self.w*self.z), self.w*self.w + self.x*self.x - self.y*self.y - self.z*self.z);
+        return (math.degrees(pitch), math.degrees(yaw), math.degrees(roll))
+
+
+"""=============================
+     Useful Math Functions
+============================="""
+
+def UnpackQuaternion(FirstWord, SecondWord, ThirdWord):
+    fVar1 = float(FirstWord & 0x7fff) * 4.315969e-05 - 0.7071068
+    fVar2 = float(SecondWord & 0x7fff) * 4.315969e-05 - 0.7071068
+    fVar3 = float(ThirdWord) * 4.315969e-05 - 0.7071068
+    sqrtval = ((1.0 - fVar1 * fVar1) - fVar2 * fVar2) - fVar3 * fVar3
+    if (sqrtval < 0):
+        return None
+    fVar4 = math.sqrt(((1.0 - fVar1 * fVar1) - fVar2 * fVar2) - fVar3 * fVar3)
+    if ((FirstWord & 0x8000) == 0):
+        if ((SecondWord & 0x8000) != 0):
+            return Quaternion(fVar1, fVar2, fVar4, fVar3)
+    elif ((SecondWord & 0x8000) != 0):
+        return Quaternion(fVar1, fVar2, fVar3, fVar4)
+
+    if ((FirstWord & 0x8000) != 0):
+        return Quaternion(fVar1, fVar4, fVar2, fVar3)
+    return Quaternion(fVar4, fVar1, fVar2, fVar3)
 
 
 """=============================
@@ -91,6 +148,7 @@ def GetMABVersion(file):
     if (not supported):
         print("This format is not yet supported\n")
         exit()
+    global_mabversion = data
 
 def GetMABSections(file):
     """
@@ -142,26 +200,68 @@ def GetMABSections(file):
 
     return sections
 
-def GetSkeletonBones(file):
+def GetMeshBones(file):
     """
-    Reads a skeleton file and returns a list of bone names 
+    Reads a xbg mesh file and returns a list of bone names 
     """
-
-    if (struct.unpack("3s", file.read(3))[0].decode('ascii') != "LKS"):
-        print("This is not a skeleton file\n")
+    bones = []
+    if (struct.unpack("4s", file.read(4))[0][::-1].decode('ascii') != "MESH"):
+        print("This is not a mesh file\n")
         exit()
+    majorver = struct.unpack("<H",file.read(2))[0]
+    minorver = struct.unpack("<H",file.read(2))[0]
 
-    # Read the bone count
-    file.seek(16, 0)
-    bonecount = struct.unpack("<H", file.read(2))[0]
+    file.seek(28, 0)
+
+    # Read the chunk count
+    chunkcount = struct.unpack("<L",file.read(4))[0]
+    
+    # Find the skeleton chunk
+    for c in range(chunkcount):
+        chunkstart = file.tell()
+        chunkname = struct.unpack("4s",file.read(4))[0][::-1].decode("ascii")
+        file.seek(4, 1)
+        chunksize = struct.unpack("<L",file.read(4))[0]
+        file.seek(8, 1)
+        if (chunkname != "NODE"):
+            file.seek(chunksize - 20, 1)
+            continue
+
+        # Iterate through all bones
+        bonecount = struct.unpack("<L",file.read(4))[0]
+        for i in range(bonecount):
+            file.seek(12, 1)
+
+            # Get the parent bone id
+            parentid = struct.unpack("<l",file.read(4))[0]
+
+            # Skip a bunch of bytes we don't need
+            if majorver == 46:
+                file.seek(48, 1)
+            else:
+                file.seek(40, 1)
+            file.seek(12, 1)
+
+            # Get the bone name
+            namelen = struct.unpack("<L",file.read(4))[0]
+            bonename = struct.unpack("%ss" %namelen, file.read(namelen))[0].decode("ascii")
+
+            # Store it
+            b = MeshBone()
+            b.Name = bonename
+            b.Parent = ""
+            bones.append(b)
+
+            # Skip more bytes so we can check the next bone
+            file.seek(1,1)
+            if majorver == 46:
+                file.seek(4,1)
+
+        break
 
     # Read each bone
-    bones = []
-    file.seek(68, 0)
-    for i in range(bonecount):
-        stringsize = struct.unpack("<I", file.read(4))[0]
-        bones.append(struct.unpack(str(stringsize)+"s", file.read(stringsize))[0].decode('ascii'))
-        file.seek(48, 1)
+        #stringsize = struct.unpack("<I", file.read(4))[0]
+        #bones.append(struct.unpack(str(stringsize)+"s", file.read(stringsize))[0].decode('ascii'))
 
     return bones
 
@@ -196,7 +296,32 @@ def ParseSection_RotationKeyframes(file, sectionoffset, animlength_inseconds, bo
         file.seek(-4, 1)
         sections.append(kf)
         curoffset = kf.OffsetStart + kf.Size
-    print(*sections, sep="\n")
+
+    # Show the sections
+    print("\nQuaternion Keyframe Section: ")
+    for s in sections:
+        print("    " + str(s))
+
+    # Unpack the Quaternion data
+    file.seek(sectionoffset, 0)
+    frame = 0
+    for kf in sections:
+        bytesread = 0
+        print("    Frame " + str(frame))
+        file.seek(sectionoffset+kf.OffsetStart, 0)
+        while (bytesread+6 <= kf.Size):
+            FirstWord = struct.unpack("<H", file.read(2))[0]
+            SecondWord = struct.unpack("<H", file.read(2))[0]
+            ThirdWord = struct.unpack("<h", file.read(2))[0]
+            bytesread += 6
+            quat = UnpackQuaternion(FirstWord, SecondWord, ThirdWord)
+            if not (quat == None):
+                print("        " + str(quat.euler()))
+            else:
+                print("        Bad quat, skipping 2 bytes")
+                file.seek(-4, 1)
+                bytesread -= 4
+        frame += 1
 
 
 """=============================
@@ -209,7 +334,7 @@ def main():
     """
 
     if (len(sys.argv) < 3):
-        print("Usage:\npython3 animparser.py <animation.mab> <bones.skeleton>\n")
+        print("Usage:\npython3 animparser.py <animation.mab> <model.xbg>\n")
         exit()
 
     # Try to open the animation file
@@ -221,9 +346,9 @@ def main():
 
     # Now lets open the skeleton file
     try:
-        fskel = open(sys.argv[2], "rb")
+        fmesh = open(sys.argv[2], "rb")
     except FileNotFoundError:
-        print("Unable to open the sekeleton file\n")
+        print("Unable to open the mesh file\n")
         exit()
 
     # Ensure it's a valid MAB file that we know how to parse
@@ -239,28 +364,30 @@ def main():
     # Print stuff
     if (DEBUG):
         tobin = lambda x, count=16: "".join(map(lambda y:str((x>>y)&1), range(count-1, -1, -1)))
-        print("Animation Length (In Seconds) - "+str(animlength_inseconds))
-        print("Unknown Section 1  - "+hex(sections.UnknownSection1[0])+","+str(sections.UnknownSection1[1]))
-        print("Unknown Section 2  - "+hex(sections.UnknownSection2[0])+","+str(sections.UnknownSection2[1]))
-        print("Root Rotation      - "+hex(sections.Rotation[0])+","+str(sections.Rotation[1]))
-        print("Rotation Keyframes - "+hex(sections.Keyframes[0])+","+str(sections.Keyframes[1]))
-        print("Unknown Section 3  - "+hex(sections.UnknownSection3[0])+","+str(sections.UnknownSection3[1]))
-        print("Offset Animation   - "+hex(sections.Offsets[0])+","+str(sections.Offsets[1]))
-        print("Events             - "+hex(sections.Events[0])+","+str(sections.Events[1]))
-        print("Unknown Section 4  - "+hex(sections.UnknownSection4[0])+","+str(sections.UnknownSection4[1]))
-        print("Unknown Section 5  - "+hex(sections.UnknownSection5[0])+","+str(sections.UnknownSection5[1]))
+        print("    Animation Length (In Seconds) - "+str(animlength_inseconds))
+        print("    Unknown Section 1  - "+hex(sections.UnknownSection1[0])+","+str(sections.UnknownSection1[1]))
+        print("    Unknown Section 2  - "+hex(sections.UnknownSection2[0])+","+str(sections.UnknownSection2[1]))
+        print("    Root Rotation      - "+hex(sections.Rotation[0])+","+str(sections.Rotation[1]))
+        print("    Rotation Keyframes - "+hex(sections.Keyframes[0])+","+str(sections.Keyframes[1]))
+        print("    Unknown Section 3  - "+hex(sections.UnknownSection3[0])+","+str(sections.UnknownSection3[1]))
+        print("    Offset Animation   - "+hex(sections.Offsets[0])+","+str(sections.Offsets[1]))
+        print("    Events             - "+hex(sections.Events[0])+","+str(sections.Events[1]))
+        print("    Unknown Section 4  - "+hex(sections.UnknownSection4[0])+","+str(sections.UnknownSection4[1]))
+        print("    Unknown Section 5  - "+hex(sections.UnknownSection5[0])+","+str(sections.UnknownSection5[1]))
     
     # Get the bones list
-    bones = GetSkeletonBones(fskel)
+    bones = GetMeshBones(fmesh)
     if (DEBUG):
-        print("\nBones: " + str(bones)+"\n")
+        print("\nBones:")
+        for b in bones:
+            print("   " + str(b))
 
     # Parse the Rotation Keyframes section
     ParseSection_RotationKeyframes(fanim, sections.Keyframes[0], animlength_inseconds, len(bones))
 
     # Close the files as we're done with them
     fanim.close()
-    fskel.close()
+    fmesh.close()
 
     print("\nFinished!\n")
 

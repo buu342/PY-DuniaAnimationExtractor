@@ -13,11 +13,11 @@ Contributions welcome!
 ### Script Usage:
 
 1. First, unpack the .dat and .fat of your Dunia Engine game of choice. You will need a tool such as [Gibbed 2 Dunia Tools](https://github.com/gibbed/Gibbed.Dunia).
-2. Find the model you want to rip the animations from, and grab its `.skeleton` file.
+2. Find the model you want to rip the animations from, and grab its `.xbg` file.
 3. Find the `.mab` animation you want to convert.
 4. Run the script like so:
 ```
-python3 animparser.py animation.mab armature.skeleton
+python3 animparser.py animation.mab mesh.xbg
 ```
 
 ### Documentation
