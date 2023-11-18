@@ -54,11 +54,15 @@ class MeshBone:
     Name: str
     Parent: str
 
+    def __init__(self):
+        self.Name = ""
+        self.Parent = ""
+
     def __repr__(self) -> str:
-        if self.Parent == "":
-            return f"{type(self).__name__}(Name={self.Name})"
+        if (self.Parent == ""):
+            return f"{type(self).__name__}(Name=\"{self.Name}\")"
         else:
-            return f"{type(self).__name__}(Name={self.Name}, Parent={self.Parent})"
+            return f"{type(self).__name__}(Name=\"{self.Name}\", Parent=\"{self.Parent}\")"
 
 class RotKeyFrameSection:
     """
@@ -249,21 +253,29 @@ def GetMeshBones(file):
             # Store it
             b = MeshBone()
             b.Name = bonename
-            b.Parent = ""
+            if (parentid >= 0 and bones[parentid] != None):
+                b.Parent = bones[parentid].Name
             bones.append(b)
 
             # Skip more bytes so we can check the next bone
             file.seek(1,1)
             if majorver == 46:
                 file.seek(4,1)
-
         break
-
-    # Read each bone
-        #stringsize = struct.unpack("<I", file.read(4))[0]
-        #bones.append(struct.unpack(str(stringsize)+"s", file.read(stringsize))[0].decode('ascii'))
-
     return bones
+
+def ParseSection_RootRotations(file, sectionoffset, animlength_inseconds, bonecount):
+    rots = []
+    file.seek(sectionoffset, 0)
+    rotcount = struct.unpack("<i", file.read(4))[0]
+    file.seek(4, 1)
+    for r in range(rotcount):
+        FirstWord = struct.unpack("<H", file.read(2))[0]
+        SecondWord = struct.unpack("<H", file.read(2))[0]
+        ThirdWord = struct.unpack("<h", file.read(2))[0]
+        quat = UnpackQuaternion(FirstWord, SecondWord, ThirdWord)
+        rots.append(quat)
+    return rots
 
 def ParseSection_RotationKeyframes(file, sectionoffset, animlength_inseconds, bonecount):
     """
@@ -285,8 +297,8 @@ def ParseSection_RotationKeyframes(file, sectionoffset, animlength_inseconds, bo
     file.seek(sectionoffset+lastoffset+4, 0)
     sectionsize_nopadding = struct.unpack("<i", file.read(4))[0]
 
-    # Now get each section
-    sections = []
+    # Now get each subsection
+    subsections = []
     curoffset = 0
     file.seek(sectionoffset+8, 0)
     while (curoffset < sectionsize_nopadding):
@@ -294,18 +306,18 @@ def ParseSection_RotationKeyframes(file, sectionoffset, animlength_inseconds, bo
         kf.OffsetStart = struct.unpack("<i", file.read(4))[0]
         kf.Size = struct.unpack("<i", file.read(4))[0] - kf.OffsetStart
         file.seek(-4, 1)
-        sections.append(kf)
+        subsections.append(kf)
         curoffset = kf.OffsetStart + kf.Size
 
     # Show the sections
     print("\nQuaternion Keyframe Section: ")
-    for s in sections:
+    for s in subsections:
         print("    " + str(s))
 
     # Unpack the Quaternion data
     file.seek(sectionoffset, 0)
     frame = 0
-    for kf in sections:
+    for kf in subsections:
         bytesread = 0
         print("    Frame " + str(frame))
         file.seek(sectionoffset+kf.OffsetStart, 0)
@@ -381,6 +393,14 @@ def main():
         print("\nBones:")
         for b in bones:
             print("   " + str(b))
+
+    # Parse the Root Rotation section
+    rootrots = ParseSection_RootRotations(fanim, sections.Rotation[0], animlength_inseconds, len(bones))
+    if (DEBUG):
+        print("\nRoot Rotation Section:")
+        print("    " + str(len(rootrots)) + " rotation values")
+        for q in rootrots:
+            print("    " + str(q.euler()))
 
     # Parse the Rotation Keyframes section
     ParseSection_RotationKeyframes(fanim, sections.Keyframes[0], animlength_inseconds, len(bones))
