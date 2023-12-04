@@ -105,10 +105,10 @@ def UnpackQuaternion(FirstWord, SecondWord, ThirdWord):
     fVar1 = float(FirstWord & 0x7fff) * 4.315969e-05 - 0.7071068
     fVar2 = float(SecondWord & 0x7fff) * 4.315969e-05 - 0.7071068
     fVar3 = float(ThirdWord) * 4.315969e-05 - 0.7071068
-    sqrtval = ((1.0 - fVar1 * fVar1) - fVar2 * fVar2) - fVar3 * fVar3
+    sqrtval = 1.0 - math.pow(fVar1, 2) - math.pow(fVar2, 2) - math.pow(fVar3, 2)
     if (sqrtval < 0):
         return None
-    fVar4 = math.sqrt(((1.0 - fVar1 * fVar1) - fVar2 * fVar2) - fVar3 * fVar3)
+    fVar4 = math.sqrt(sqrtval)
     if ((FirstWord & 0x8000) == 0):
         if ((SecondWord & 0x8000) != 0):
             return Quaternion(fVar1, fVar2, fVar4, fVar3)
@@ -294,13 +294,13 @@ def ParseSection_RotationKeyframes(file, sectionoffset, animlength_inseconds, bo
     lastoffset = ((int(magicfloat*animlength_inseconds) >> 3)*4) + 8 
 
     # Get the section size (without padding)
-    file.seek(sectionoffset+lastoffset+4, 0)
+    file.seek(sectionoffset + lastoffset + 4, 0)
     sectionsize_nopadding = struct.unpack("<i", file.read(4))[0]
 
     # Now get each subsection
     subsections = []
     curoffset = 0
-    file.seek(sectionoffset+8, 0)
+    file.seek(sectionoffset + 8, 0)
     while (curoffset < sectionsize_nopadding):
         kf = RotKeyFrameSection()
         kf.OffsetStart = struct.unpack("<i", file.read(4))[0]
@@ -318,22 +318,50 @@ def ParseSection_RotationKeyframes(file, sectionoffset, animlength_inseconds, bo
     file.seek(sectionoffset, 0)
     frame = 0
     for kf in subsections:
-        bytesread = 0
         print("    Frame " + str(frame))
-        file.seek(sectionoffset+kf.OffsetStart, 0)
-        while (bytesread+6 <= kf.Size):
+        file.seek(sectionoffset + kf.OffsetStart, 0)
+
+        # Read the first quaternion
+        FirstWord = struct.unpack("<H", file.read(2))[0]
+        SecondWord = struct.unpack("<H", file.read(2))[0]
+        ThirdWord = struct.unpack("<h", file.read(2))[0]
+        quat = UnpackQuaternion(FirstWord, SecondWord, ThirdWord)
+        if not (quat == None):
+            print("        " + str(quat.euler()))
+        else:
+            print("        Bad quat at " + hex(file.tell() - sectionoffset - 6))
+
+        # Read the mystery short and count the number of 1's, which corresponds to the number of quaternions stored afterwards
+        MysteryShort = struct.unpack("<B", file.read(2))[0]
+        QuatCount = MysteryShort.bit_count()
+        print("        " + str(QuatCount) + " quats stored afterwards")
+
+        # Unpack all subsequent quaternions
+        while (QuatCount > 0):
             FirstWord = struct.unpack("<H", file.read(2))[0]
             SecondWord = struct.unpack("<H", file.read(2))[0]
             ThirdWord = struct.unpack("<h", file.read(2))[0]
-            bytesread += 6
             quat = UnpackQuaternion(FirstWord, SecondWord, ThirdWord)
             if not (quat == None):
                 print("        " + str(quat.euler()))
             else:
-                print("        Bad quat, skipping 2 bytes")
-                file.seek(-4, 1)
-                bytesread -= 4
+                print("        Bad quat at " + hex(file.tell() - sectionoffset - 6))
+            QuatCount -= 1
         frame += 1
+
+def TestQuaternion(str):
+    data = bytearray.fromhex(str)
+    FirstWord  = struct.unpack('<H', data[0:2])[0]
+    print(FirstWord)
+    SecondWord = struct.unpack('<H', data[2:4])[0]
+    print(SecondWord)
+    ThirdWord  = struct.unpack('<H', data[4:6])[0]
+    print(ThirdWord)
+    quat = UnpackQuaternion(FirstWord, SecondWord, ThirdWord)
+    if not (quat == None):
+        print(quat.euler())
+    else:
+        print("Bad quaternion")
 
 
 """=============================
@@ -345,7 +373,10 @@ def main():
     Program entrypoint
     """
 
-    if (len(sys.argv) < 3):
+    if (len(sys.argv) == 2):
+        TestQuaternion(sys.argv[1])
+        exit()
+    if (not len(sys.argv) == 3):
         print("Usage:\npython3 animparser.py <animation.mab> <model.xbg>\n")
         exit()
 
@@ -391,8 +422,9 @@ def main():
     bones = GetMeshBones(fmesh)
     if (DEBUG):
         print("\nBones:")
+        print("    " + str(len(bones)) + " bones")
         for b in bones:
-            print("   " + str(b))
+            print("    " + str(b))
 
     # Parse the Root Rotation section
     rootrots = ParseSection_RootRotations(fanim, sections.Rotation[0], animlength_inseconds, len(bones))
